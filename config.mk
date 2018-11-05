@@ -5,6 +5,7 @@ app ?= 0
 curl ?= 1
 debug ?= 0
 exif ?= 0
+heif ?= 0
 help ?= 0
 verscmp ?= 1
 xinerama ?= 1
@@ -84,6 +85,14 @@ ifeq (${exif},1)
 	MAN_EXIF = enabled
 else
 	MAN_EXIF = disabled
+endif
+
+ifeq (${heif},1)
+	CFLAGS += -DHAVE_LIBHEIF
+	LDLIBS += -lheif
+	MAN_HEIF = enabled
+else
+	MAN_HEIF = disabled
 endif
 
 MAN_DATE ?= ${shell date '+%B %d, %Y'}

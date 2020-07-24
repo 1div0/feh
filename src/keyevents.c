@@ -1,7 +1,7 @@
 /* keyevents.c
 
 Copyright (C) 1999-2003 Tom Gilbert.
-Copyright (C) 2010-2018 Daniel Friesel.
+Copyright (C) 2010-2020 Daniel Friesel.
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to
@@ -195,10 +195,10 @@ void init_keyevents(void) {
 	feh_set_kb("toggle_caption" , 0, XK_c, 0, 0, 0, 0);
 	feh_set_kb("toggle_pause" , 0, XK_h, 0, 0, 0, 0);
 	feh_set_kb("toggle_menu" , 0, XK_m, 0, 0, 0, 0);
-	feh_set_kb("toggle_fullscreen" , 0, XK_v, 0, 0, 0, 0);
+	feh_set_kb("toggle_fullscreen" , 0, XK_f, 0, 0, 0, 0);
 	feh_set_kb("reload_image" , 0, XK_r, 0, 0, 0, 0);
 	feh_set_kb("save_image" , 0, XK_s, 0, 0, 0, 0);
-	feh_set_kb("save_filelist" , 0, XK_f, 0, 0, 0, 0);
+	feh_set_kb("save_filelist" , 0, XK_L, 0, 0, 0, 0);
 	feh_set_kb("orient_1" , 0, XK_greater, 0, 0, 0, 0);
 	feh_set_kb("orient_3" , 0, XK_less, 0, 0, 0, 0);
 	feh_set_kb("flip" , 0, XK_underscore, 0, 0, 0, 0);
@@ -691,7 +691,10 @@ void feh_event_handle_generic(winwidget winwid, unsigned int state, KeySym keysy
 			slideshow_change_image(winwid, SLIDE_RAND, 1);
 	}
 	else if (feh_is_kp(EVENT_toggle_caption, state, keysym, button)) {
-		if (opt.caption_path) {
+		if (opt.caption_path && path_is_url(FEH_FILE(winwid->file->data)->filename)) {
+			im_weprintf(winwid, "Caption entry is not supported on URLs");
+		}
+		else if (opt.caption_path) {
 			/*
 			 * editing captions in slideshow mode does not make any sense
 			 * at all; this is just in case someone accidentally does it...
@@ -707,6 +710,8 @@ void feh_event_handle_generic(winwidget winwid, unsigned int state, KeySym keysy
 	}
 	else if (feh_is_kp(EVENT_toggle_pause, state, keysym, button)) {
 		slideshow_pause_toggle(winwid);
+		/* We need to re-render the image to update the info string immediately. */
+		winwidget_render_image(winwid, 0, 0);
 	}
 	else if (feh_is_kp(EVENT_save_image, state, keysym, button)) {
 		slideshow_save_image(winwid);

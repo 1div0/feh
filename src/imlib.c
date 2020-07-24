@@ -1,7 +1,7 @@
 /* imlib.c
 
 Copyright (C) 1999-2003 Tom Gilbert.
-Copyright (C) 2010-2018 Daniel Friesel.
+Copyright (C) 2010-2020 Daniel Friesel.
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to
@@ -26,6 +26,7 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 #include "feh.h"
 #include "filelist.h"
+#include "signals.h"
 #include "winwidget.h"
 #include "options.h"
 
@@ -58,6 +59,8 @@ XineramaScreenInfo *xinerama_screens = NULL;
 int xinerama_screen;
 int num_xinerama_screens;
 #endif				/* HAVE_LIBXINERAMA */
+
+gib_hash* conversion_cache = NULL;
 
 int childpid = 0;
 
@@ -251,16 +254,33 @@ int feh_load_image(Imlib_Image * im, feh_file * file)
 		if (!err && im) {
 			real_filename = file->filename;
 			file->filename = tmpname;
+
+			/*
+			 * feh does not associate a non-native image with its temporary
+			 * filename and may delete the temporary file right after loading.
+			 * To ensure that it is still aware of image size, dimensions, etc.,
+			 * file_info is preloaded here. To avoid a memory leak when loading
+			 * a non-native file multiple times in a slideshow, the file_info
+			 * struct is freed first. If file->info is not set, feh_file_info_free
+			 * is a no-op.
+			 */
+			feh_file_info_free(file->info);
 			feh_file_info_load(file, *im);
+
 			file->filename = real_filename;
 #ifdef HAVE_LIBEXIF
 			file->ed = exif_get_data(tmpname);
 #endif
 		}
-		if ((image_source != SRC_HTTP) || !opt.keep_http)
+		if (!opt.use_conversion_cache && ((image_source != SRC_HTTP) || !opt.keep_http))
 			unlink(tmpname);
+		// keep_http already performs an add_file_to_rm_filelist call
+		else if (opt.use_conversion_cache && !opt.keep_http)
+			// add_file_to_rm_filelist duplicates tmpname
+			add_file_to_rm_filelist(tmpname);
 
-		free(tmpname);
+		if (image_source != SRC_HTTP && !opt.use_conversion_cache)
+			free(tmpname);
 	}
 
 	if ((err) || (!im)) {
@@ -318,6 +338,89 @@ int feh_load_image(Imlib_Image * im, feh_file * file)
 	return(1);
 }
 
+void feh_reload_image(winwidget w, int resize, int force_new)
+{
+	char *new_title;
+	int len;
+	Imlib_Image tmp;
+	int old_w, old_h;
+
+	if (!w->file) {
+		im_weprintf(w, "couldn't reload, this image has no file associated with it.");
+		winwidget_render_image(w, 0, 0);
+		return;
+	}
+
+	D(("resize %d, force_new %d\n", resize, force_new));
+
+	free(FEH_FILE(w->file->data)->caption);
+	FEH_FILE(w->file->data)->caption = NULL;
+
+	len = strlen(w->name) + sizeof("Reloading: ") + 1;
+	new_title = emalloc(len);
+	snprintf(new_title, len, "Reloading: %s", w->name);
+	winwidget_rename(w, new_title);
+	free(new_title);
+
+	old_w = gib_imlib_image_get_width(w->im);
+	old_h = gib_imlib_image_get_height(w->im);
+
+	/*
+	 * If we don't free the old image before loading the new one, Imlib2's
+	 * caching will get in our way.
+	 * However, if --reload is used (force_new == 0), we want to continue if
+	 * the new image cannot be loaded, so we must not free the old image yet.
+	 */
+	if (force_new)
+		winwidget_free_image(w);
+
+	// if it's an external image, our own cache will also get in your way
+	char *sfn;
+	if (opt.use_conversion_cache && conversion_cache && (sfn = gib_hash_get(conversion_cache, FEH_FILE(w->file->data)->filename)) != NULL) {
+		free(sfn);
+		gib_hash_set(conversion_cache, FEH_FILE(w->file->data)->filename, NULL);
+	}
+
+	if ((feh_load_image(&tmp, FEH_FILE(w->file->data))) == 0) {
+		if (force_new)
+			eprintf("failed to reload image\n");
+		else {
+			im_weprintf(w, "Couldn't reload image. Is it still there?");
+			winwidget_render_image(w, 0, 0);
+		}
+		return;
+	}
+
+	if (!resize && ((old_w != gib_imlib_image_get_width(tmp)) ||
+			(old_h != gib_imlib_image_get_height(tmp))))
+		resize = 1;
+
+	if (!force_new)
+		winwidget_free_image(w);
+
+	w->im = tmp;
+	winwidget_reset_image(w);
+
+	w->mode = MODE_NORMAL;
+	if ((w->im_w != gib_imlib_image_get_width(w->im))
+	    || (w->im_h != gib_imlib_image_get_height(w->im)))
+		w->had_resize = 1;
+	if (w->has_rotated) {
+		Imlib_Image temp;
+
+		temp = gib_imlib_create_rotated_image(w->im, 0.0);
+		w->im_w = gib_imlib_image_get_width(temp);
+		w->im_h = gib_imlib_image_get_height(temp);
+		gib_imlib_free_image_and_decache(temp);
+	} else {
+		w->im_w = gib_imlib_image_get_width(w->im);
+		w->im_h = gib_imlib_image_get_height(w->im);
+	}
+	winwidget_render_image(w, resize, 0);
+
+	return;
+}
+
 static int feh_file_is_raw(char *filename)
 {
 	childpid = fork();
@@ -353,6 +456,13 @@ static char *feh_dcraw_load_image(char *filename)
 	char *tmpname;
 	char *sfn;
 	int fd = -1;
+
+	if (opt.use_conversion_cache) {
+		if (!conversion_cache)
+			conversion_cache = gib_hash_new();
+		if ((sfn = gib_hash_get(conversion_cache, filename)) != NULL)
+			return sfn;
+	}
 
 	basename = strrchr(filename, '/');
 
@@ -404,6 +514,9 @@ static char *feh_dcraw_load_image(char *filename)
 			weprintf("%s - Conversion took too long, skipping", filename);
 	}
 
+	if ((sfn != NULL) && opt.use_conversion_cache)
+		gib_hash_set(conversion_cache, filename, sfn);
+
 	return sfn;
 }
 
@@ -417,6 +530,13 @@ static char *feh_magick_load_image(char *filename)
 	int fd = -1, devnull = -1;
 	int status;
 	char created_tempdir = 0;
+
+	if (opt.use_conversion_cache) {
+		if (!conversion_cache)
+			conversion_cache = gib_hash_new();
+		if ((sfn = gib_hash_get(conversion_cache, filename)) != NULL)
+			return sfn;
+	}
 
 	basename = strrchr(filename, '/');
 
@@ -536,10 +656,36 @@ static char *feh_magick_load_image(char *filename)
 	}
 
 	free(argv_fn);
+
+	if ((sfn != NULL) && opt.use_conversion_cache)
+		gib_hash_set(conversion_cache, filename, sfn);
+
 	return sfn;
 }
 
 #ifdef HAVE_LIBCURL
+
+#if LIBCURL_VERSION_NUM >= 0x072000 /* 07.32.0 */
+static int curl_quit_function(void *clientp,  curl_off_t dltotal,  curl_off_t dlnow, curl_off_t ultotal, curl_off_t ulnow)
+#else
+static int curl_quit_function(void *clientp,  double dltotal,  double dlnow, double ultotal, double ulnow)
+#endif
+{
+	// ignore "unused parameter" warnings
+	(void)clientp;
+	(void)dltotal;
+	(void)dlnow;
+	(void)ultotal;
+	(void)ulnow;
+	if (sig_exit) {
+		/*
+		 * The user wants to quit feh. Tell libcurl to abort the transfer and
+		 * return control to the main loop, where we can quit gracefully.
+		 */
+		return 1;
+	}
+	return 0;
+}
 
 static char *feh_http_load_image(char *url)
 {
@@ -552,6 +698,13 @@ static char *feh_http_load_image(char *url)
 	char *tmpname;
 	char *basename;
 	char *path = NULL;
+
+	if (opt.use_conversion_cache) {
+		if (!conversion_cache)
+			conversion_cache = gib_hash_new();
+		if ((sfn = gib_hash_get(conversion_cache, url)) != NULL)
+			return sfn;
+	}
 
 	if (opt.keep_http) {
 		if (opt.output_dir)
@@ -583,12 +736,25 @@ static char *feh_http_load_image(char *url)
 #ifdef DEBUG
 			curl_easy_setopt(curl, CURLOPT_VERBOSE, 1);
 #endif
+			/*
+			 * Do not allow requests to take longer than 30 minutes.
+			 * This should be sufficiently high to accomodate use cases with
+			 * unusually high latencies, while at the sime time avoiding
+			 * feh hanging indefinitely in unattended slideshows.
+			 */
+			curl_easy_setopt(curl, CURLOPT_TIMEOUT, 1800);
 			curl_easy_setopt(curl, CURLOPT_URL, url);
 			curl_easy_setopt(curl, CURLOPT_WRITEDATA, sfp);
 			ebuff = emalloc(CURL_ERROR_SIZE);
 			curl_easy_setopt(curl, CURLOPT_ERRORBUFFER, ebuff);
 			curl_easy_setopt(curl, CURLOPT_FAILONERROR, 1L);
 			curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1);
+#if LIBCURL_VERSION_NUM >= 0x072000 /* 07.32.0 */
+			curl_easy_setopt(curl, CURLOPT_XFERINFOFUNCTION, curl_quit_function);
+#else
+			curl_easy_setopt(curl, CURLOPT_PROGRESSFUNCTION, curl_quit_function);
+#endif
+			curl_easy_setopt(curl, CURLOPT_NOPROGRESS, 0);
 			if (opt.insecure_ssl) {
 				curl_easy_setopt(curl, CURLOPT_SSL_VERIFYPEER, 0);
 				curl_easy_setopt(curl, CURLOPT_SSL_VERIFYHOST, 0);
@@ -601,7 +767,9 @@ static char *feh_http_load_image(char *url)
 			res = curl_easy_perform(curl);
 			curl_easy_cleanup(curl);
 			if (res != CURLE_OK) {
-				weprintf("open url: %s", ebuff);
+				if (res != CURLE_ABORTED_BY_CALLBACK) {
+					weprintf("open url: %s", ebuff);
+				}
 				unlink(sfn);
 				close(fd);
 				free(sfn);
@@ -610,6 +778,8 @@ static char *feh_http_load_image(char *url)
 
 			free(ebuff);
 			fclose(sfp);
+			if (opt.use_conversion_cache)
+				gib_hash_set(conversion_cache, url, sfn);
 			return sfn;
 		} else {
 			weprintf("open url: fdopen failed:");
@@ -1224,8 +1394,10 @@ void feh_edit_inplace(winwidget w, int op)
 		return;
 	}
 
-	if (!strcmp(gib_imlib_image_format(w->im), "jpeg") &&
-			!path_is_url(FEH_FILE(w->file->data)->filename)) {
+	// Imlib2 <= 1.5 returns "jpeg", Imlib2 >= 1.6 uses "jpg"
+	if ((!strcmp(gib_imlib_image_format(w->im), "jpeg")
+				|| !strcmp(gib_imlib_image_format(w->im), "jpg"))
+			&& !path_is_url(FEH_FILE(w->file->data)->filename)) {
 		feh_edit_inplace_lossless(w, op);
 		feh_reload_image(w, 1, 1);
 		return;

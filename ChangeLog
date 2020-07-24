@@ -1,7 +1,108 @@
-git HEAD
+Fri, 29 May 2020 23:52:35 +0200  Daniel Friesel <derf+feh@finalrewind.org>
 
+* Release v3.4.1
+    * Fix lossless rotate not being lossless when using feh with Imlib2 v1.6
+      or later
+
+Sat, 11 Apr 2020 09:51:01 +0200  Daniel Friesel <derf+feh@finalrewind.org>
+
+* Release v3.4
+    * Images loaded via HTTPS/curl, ImageMagick, and dcraw are now cached
+      by default to decrease image load time on subsequent slideshow passes.
+      Caching is disabled when using `--reload` and can also be disabled with
+      the new `--no-conversion-cache` option. Suggestion and initial patch by
+      Awal Garg.
+    * Handle SIGINT/SIGTERM/SIGQUIT signals while loading images using libcurl
+      < v7.32. Patch by <https://github.com/c99pedant>.
+    * "feh --start-at URL" now loads a single-image slideshow displaying URL.
+      This allows feh.desktop to handle URLs as well as ordinary files.
+      file:/// URLs are treated as local files, so "feh --start-at file:///..."
+      without filelist arguments behaves just like "feh --start-at ..."
+      (i.e., feh will load the entire directory and start the slideshow at ...)
+    * Fix a memory leak when repeatedly cycling through slideshows containing
+      images loaded via libcurl, ImageMagick or dcraw.
+
+Tue, 03 Dec 2019 17:27:46 +0100  Daniel Friesel <derf+feh@finalrewind.org>
+
+* Release v3.3
+    * New option --class allows setting the X11 class hint per feh instance
+      (patch by Olof-Joachim Frahm)
+    * Improve handling of NULL returns from Imlib2 calls (patch by Ben Boeckel)
+    * Fix compilation with libcurl < v7.32
+
+Mon, 22 Jul 2019 20:17:03 +0200  Daniel Friesel <derf+feh@finalrewind.org>
+
+* Release v3.2.1
+    * Use --no-fehbg option in ~/.fehbg. This fixes cases where an X11
+      setup change may inadvertently alter the commandline stored in .fehbg.
+    * Fix insufficient error handling when updating ~/.fehbg. Previously,
+      a stat() error may have caused .fehbg to be update with excessive file
+      permissions (patch by Tobias Stoeckmann)
+    * Fix TOCTTOU when setting the file mode of ~/.fehbg
+      (patch by Tobias Stoeckmann)
+
+Wed, 10 Jul 2019 17:40:29 +0200  Daniel Friesel <derf+feh@finalrewind.org>
+
+* Release v3.2
+    * Build feh with inotify=1 to automatically reload changed files in
+      slideshow mode. Introduces the inotify build flag and the --auto-reload
+      option.
+    * Reload current image(s) when receiving SIGUSR1 or SIGUSR2 in single-image
+      slideshows or in multiwindow mode
+
+Sun, 17 Feb 2019 08:41:53 +0100  Daniel Friesel <derf+feh@finalrewind.org>
+
+* Releasev v3.1.3
+    * Fix missing filename in ~/.fehbg when using --no-xinerama on a feh
+      binary compiled with xinerama=1. This issue was introduced in v3.1.2.
+
+Mon, 11 Feb 2019 17:24:13 +0100  Daniel Friesel <derf+feh@finalrewind.org>
+
+* Release v3.1.2
+    * Fix missing filenames in ~/.fehbg when using --bg-* on directories and/or
+      with --randomize
+    * Fix repeated --slideshow-delay/-D option not properly overriding the
+      'start paused' flag
+    * Fix repeated --info option not properly overriding the 'draw info' flag
+
+Fri, 07 Dec 2018 22:51:15 +0100  Daniel Friesel <derf+feh@finalrewind.org>
+
+* Release v3.1.1
+    * Decrease libcurl timeout from indefinite to 30 minutes. This should
+      be sufficient even for use cases with unusually high timeouts (just in
+      case anyone wants to do interplanetary slideshows), while at the same
+      time avoiding stalls in unattended slideshows when encountering
+      temporary network issues.
+    * Handle SIGINT/SIGTERM/SIGQUIT signals while loading images using libcurl.
+      Previously, signals were ignored during a (possibly slow) libcurl
+      network transfer, which was not intended behaviour.
+
+Wed, 21 Nov 2018 19:37:34 +0100  Daniel Friesel <derf+feh@finalrewind.org>
+
+* Release v3.1
+    * Running "feh --start-at .../file.jpg" without specifying images,
+      directories or filelists to load is now equivalent to running
+      "feh --start-at .../file.jpg $(dirname .../file.jpg)". This way, it is
+      possible to view a specific file and browse all other files in the
+      corresponding directory. This is especially useful when starting feh
+      from file managers.
+    * Introduce fuzzy matching in --start-at: If the specified path is not
+      found in the file list, feh now resorts to comparing basenames (i.e.,
+      file names without the directory components). This allows calls
+      like "feh --start-at cat.jpg ~/Pictures", which led to a file not found
+      error in previous versions.
+    * Respect -j / --output-dir when using save_image or save_filelist actions.
+
+Fri, 09 Nov 2018 17:17:15 +0100  Daniel Friesel <derf+feh@finalrewind.org>
+
+* Release v3.0
     * Remove deprecated webcam scripts (feh-cam and gen-cam-menu)
     * Remove deprecated collage mode (-c/--collage)
+    * Remove deprecated option --cycle-once (use --on-last-slide=quit instead)
+    * Remove deprecated option --menu-bg
+    * Change default save_filelist key from "f" to "L" (mnemonic: fileList)
+    * Change default toggle_fullscreen key from "v" to "f" as this is also
+      used by mplayer, mpv and similar
     * flip and rotation (keys "<", ">", "|", and "_") no longer change the
       underlying file. This leaves delete ("Ctrl+Delete") as the only
       destructive action which is enabled by default

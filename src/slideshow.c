@@ -1,7 +1,7 @@
 /* slideshow.c
 
 Copyright (C) 1999-2003 Tom Gilbert.
-Copyright (C) 2010-2018 Daniel Friesel.
+Copyright (C) 2010-2020 Daniel Friesel.
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to
@@ -37,6 +37,24 @@ void init_slideshow_mode(void)
 	int success = 0;
 	gib_list *l = filelist, *last = NULL;
 
+	/*
+	 * In theory, --start-at FILENAME is simple: Look for a file called
+	 * FILENAME, start the filelist there, done.
+	 *
+	 * In practice, there are cases where this isn't sufficient. For instance,
+	 * a user running 'feh --start-at hello.jpg /tmp' will expect feh to start
+	 * at /tmp/hello.jpg, as if they had used
+	 * 'feh --start-at /tmp/hello.jpg /tmp'. Similarly, XDG Desktop files
+	 * may lead to the invocation 'feh --start-at /tmp/hello.jpg .' in /tmp,
+	 * expecting the behaviour of 'feh --start-at ./hello.jpg .'.
+	 *
+	 * Since a good user experience is not about being technically correct, but
+	 * about delivering the expected behaviour, we do some fuzzy matching
+	 * here. In the worst case, this will cause --start-at to start at the
+	 * wrong file.
+	 */
+
+	// Try finding an exact filename match first
 	for (; l && opt.start_list_at; l = l->next) {
 		if (!strcmp(opt.start_list_at, FEH_FILE(l->data)->filename)) {
 			opt.start_list_at = NULL;
@@ -44,6 +62,34 @@ void init_slideshow_mode(void)
 		}
 	}
 
+	/*
+	 * If it didn't work (opt.start_list_at is still set): Fall back to
+	 * comparing just the filenames without directory prefixes. This may lead
+	 * to false positives, but for now that's just the way it is.
+	 */
+	if (opt.start_list_at) {
+		char *current_filename;
+		char *start_at_filename = strrchr(opt.start_list_at, '/');
+		if (start_at_filename) {
+			start_at_filename++; // We only care about the part after the '/'
+		} else {
+			start_at_filename = opt.start_list_at;
+		}
+		for (l = filelist; l && opt.start_list_at; l = l->next) {
+			current_filename = strrchr(FEH_FILE(l->data)->filename, '/');
+			if (current_filename) {
+				current_filename++; // We only care about the part after the '/'
+			} else {
+				current_filename = FEH_FILE(l->data)->filename;
+			}
+			if (!strcmp(start_at_filename, current_filename)) {
+				opt.start_list_at = NULL;
+				break;
+			}
+		}
+	}
+
+	// If that didn't work either, we're out of luck.
 	if (opt.start_list_at)
 		eprintf("--start-at %s: File not found in filelist",
 				opt.start_list_at);
@@ -133,82 +179,6 @@ void cb_reload_timer(void *data)
 
 	feh_reload_image(w, 1, 0);
 	feh_add_unique_timer(cb_reload_timer, w, opt.reload);
-	return;
-}
-
-void feh_reload_image(winwidget w, int resize, int force_new)
-{
-	char *new_title;
-	int len;
-	Imlib_Image tmp;
-	int old_w, old_h;
-
-	if (!w->file) {
-		im_weprintf(w, "couldn't reload, this image has no file associated with it.");
-		winwidget_render_image(w, 0, 0);
-		return;
-	}
-
-	D(("resize %d, force_new %d\n", resize, force_new));
-
-	free(FEH_FILE(w->file->data)->caption);
-	FEH_FILE(w->file->data)->caption = NULL;
-
-	len = strlen(w->name) + sizeof("Reloading: ") + 1;
-	new_title = emalloc(len);
-	snprintf(new_title, len, "Reloading: %s", w->name);
-	winwidget_rename(w, new_title);
-	free(new_title);
-
-	old_w = gib_imlib_image_get_width(w->im);
-	old_h = gib_imlib_image_get_height(w->im);
-
-	/*
-	 * If we don't free the old image before loading the new one, Imlib2's
-	 * caching will get in our way.
-	 * However, if --reload is used (force_new == 0), we want to continue if
-	 * the new image cannot be loaded, so we must not free the old image yet.
-	 */
-	if (force_new)
-		winwidget_free_image(w);
-
-	if ((feh_load_image(&tmp, FEH_FILE(w->file->data))) == 0) {
-		if (force_new)
-			eprintf("failed to reload image\n");
-		else {
-			im_weprintf(w, "Couldn't reload image. Is it still there?");
-			winwidget_render_image(w, 0, 0);
-		}
-		return;
-	}
-
-	if (!resize && ((old_w != gib_imlib_image_get_width(tmp)) ||
-			(old_h != gib_imlib_image_get_height(tmp))))
-		resize = 1;
-
-	if (!force_new)
-		winwidget_free_image(w);
-
-	w->im = tmp;
-	winwidget_reset_image(w);
-
-	w->mode = MODE_NORMAL;
-	if ((w->im_w != gib_imlib_image_get_width(w->im))
-	    || (w->im_h != gib_imlib_image_get_height(w->im)))
-		w->had_resize = 1;
-	if (w->has_rotated) {
-		Imlib_Image temp;
-
-		temp = gib_imlib_create_rotated_image(w->im, 0.0);
-		w->im_w = gib_imlib_image_get_width(temp);
-		w->im_h = gib_imlib_image_get_height(temp);
-		gib_imlib_free_image_and_decache(temp);
-	} else {
-		w->im_w = gib_imlib_image_get_width(w->im);
-		w->im_h = gib_imlib_image_get_height(w->im);
-	}
-	winwidget_render_image(w, resize, 0);
-
 	return;
 }
 
@@ -399,7 +369,7 @@ void feh_action_run(feh_file * file, char *action, winwidget winwid)
 	return;
 }
 
-char *format_size(int size)
+char *format_size(double size)
 {
 	static char ret[5];
 	char units[] = {' ', 'k', 'M', 'G', 'T'};
@@ -408,7 +378,7 @@ char *format_size(int size)
 		size /= 1000;
 		postfix++;
 	}
-	snprintf(ret, 5, "%3d%c", size, units[postfix]);
+	snprintf(ret, 5, "%3.0f%c", size, units[postfix]);
 	return ret;
 }
 
@@ -427,6 +397,14 @@ char *feh_printf(char *str, feh_file * file, winwidget winwid)
 		if ((*c == '%') && (*(c+1) != '\0')) {
 			c++;
 			switch (*c) {
+			case 'a':
+				if (opt.paused == 1) {
+				   strncat(ret, "paused", sizeof(ret) - strlen(ret) - 1);
+				}
+				else {
+				   strncat(ret, "playing", sizeof(ret) - strlen(ret) - 1);
+				}
+				break;
 			case 'f':
 				if (file)
 					strncat(ret, file->filename, sizeof(ret) - strlen(ret) - 1);
@@ -615,16 +593,24 @@ void slideshow_save_image(winwidget win)
 {
 	char *tmpname;
 	Imlib_Load_Error err;
+	char *base_dir = "";
+	if (opt.output_dir) {
+		base_dir = estrjoin("", opt.output_dir, "/", NULL);
+	}
 
 	if (win->file) {
-		tmpname = feh_unique_filename("", FEH_FILE(win->file->data)->name);
+		tmpname = feh_unique_filename(base_dir, FEH_FILE(win->file->data)->name);
 	} else if (mode) {
 		char *tmp;
 		tmp = estrjoin(".", mode, "png", NULL);
-		tmpname = feh_unique_filename("", tmp);
+		tmpname = feh_unique_filename(base_dir, tmp);
 		free(tmp);
 	} else {
-		tmpname = feh_unique_filename("", "noname.png");
+		tmpname = feh_unique_filename(base_dir, "noname.png");
+	}
+
+	if (opt.output_dir) {
+		free(base_dir);
 	}
 
 	if (opt.verbose)

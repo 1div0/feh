@@ -3,7 +3,7 @@ use strict;
 use warnings;
 use 5.010;
 
-use Test::More tests => 3;
+use Test::More tests => 1;
 
 SKIP: {
 	my $mandoc_present = 0;
@@ -17,7 +17,7 @@ SKIP: {
 
 	if ( not $mandoc_present ) {
 		diag('mandoc not installed, test skipped. This is NOT fatal.');
-		skip( 'mandoc not installed', 3 );
+		skip( 'mandoc not installed', 1 );
 	}
 
 	for my $file ('feh') {

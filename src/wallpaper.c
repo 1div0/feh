@@ -1,7 +1,7 @@
 /* wallpaper.c
 
 Copyright (C) 1999-2003 Tom Gilbert.
-Copyright (C) 2010-2018 Daniel Friesel.
+Copyright (C) 2010-2020 Daniel Friesel.
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to
@@ -452,6 +452,7 @@ void feh_wm_set_bg(char *fil, Imlib_Image im, int centered, int scaled,
 			home = getenv("HOME");
 			if (home) {
 				FILE *fp;
+				int fd;
 				char *path;
 				char *absolute_path;
 				struct stat s;
@@ -462,7 +463,7 @@ void feh_wm_set_bg(char *fil, Imlib_Image im, int centered, int scaled,
 				} else {
 					fputs("#!/bin/sh\n", fp);
 					fputs(cmdargv[0], fp);
-					fputs(" --bg-", fp);
+					fputs(" --no-fehbg --bg-", fp);
 					if (centered)
 						fputs("center", fp);
 					else if (scaled)
@@ -502,15 +503,16 @@ void feh_wm_set_bg(char *fil, Imlib_Image im, int centered, int scaled,
 					}
 					fputc(' ', fp);
 					if (use_filelist) {
-						for (int i = 0; i < cmdargc; i++) {
-							if (filelist_pos && !strcmp(FEH_FILE(filelist_pos->data)->filename, cmdargv[i])) {
-								/* argument is a file */
-								absolute_path = feh_absolute_path(cmdargv[i]);
-								fputs(shell_escape(absolute_path), fp);
-								filelist_pos = filelist_pos->next;
-								free(absolute_path);
-								fputc(' ', fp);
-							}
+#ifdef HAVE_LIBXINERAMA
+						for (int i = 0; (i < opt.xinerama ? num_xinerama_screens : 1) && filelist_pos; i++) {
+#else
+						for (int i = 0; (i < 1                   ) && filelist_pos; i++) {
+#endif
+							absolute_path = feh_absolute_path(FEH_FILE(filelist_pos->data)->filename);
+							fputs(shell_escape(absolute_path), fp);
+							filelist_pos = filelist_pos->next;
+							free(absolute_path);
+							fputc(' ', fp);
 						}
 					} else if (fil) {
 						absolute_path = feh_absolute_path(fil);
@@ -518,11 +520,11 @@ void feh_wm_set_bg(char *fil, Imlib_Image im, int centered, int scaled,
 						free(absolute_path);
 					}
 					fputc('\n', fp);
-					fclose(fp);
-					stat(path, &s);
-					if (chmod(path, s.st_mode | S_IXUSR | S_IXGRP) != 0) {
+					fd = fileno(fp);
+					if (fstat(fd, &s) != 0 || fchmod(fd, s.st_mode | S_IXUSR | S_IXGRP) != 0) {
 						weprintf("Can't set %s as executable", path);
 					}
+					fclose(fp);
 				}
 				free(path);
 			}

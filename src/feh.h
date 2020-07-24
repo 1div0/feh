@@ -1,7 +1,7 @@
 /* feh.h
 
 Copyright (C) 1999-2003 Tom Gilbert.
-Copyright (C) 2010-2018 Daniel Friesel.
+Copyright (C) 2010-2020 Daniel Friesel.
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to
@@ -31,7 +31,7 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
  * strverscmp(3) is a GNU extension. In most supporting C libraries it
  * requires _GNU_SOURCE to be defined.
  */
-#ifdef HAVE_VERSCMP
+#ifdef HAVE_STRVERSCMP
 #define _GNU_SOURCE
 #endif
 
@@ -152,7 +152,7 @@ void feh_event_handle_stdin();
 void feh_event_handle_generic(winwidget winwid, unsigned int state, KeySym keysym, unsigned int button);
 fehkey *feh_str_to_kb(char * action);
 void feh_action_run(feh_file * file, char *action, winwidget winwid);
-char *format_size(int size);
+char *format_size(double size);
 char *feh_printf(char *str, feh_file * file, winwidget winwid);
 void im_weprintf(winwidget w, char *fmt, ...);
 void feh_draw_zoom(winwidget w);
@@ -179,6 +179,12 @@ void feh_edit_inplace_lossless(winwidget w, int orientation);
 gib_list *feh_wrap_string(char *text, int wrap_width, Imlib_Font fn, gib_style * style);
 char *build_caption_filename(feh_file * file, short create_dir);
 gib_list *feh_list_jump(gib_list * root, gib_list * l, int direction, int num);
+#ifdef HAVE_INOTIFY
+void feh_event_handle_inotify(void);
+#endif
+#ifndef HAVE_STRVERSCMP
+int strverscmp(const char *l0, const char *r0);
+#endif
 
 /* Imlib stuff */
 extern Display *disp;

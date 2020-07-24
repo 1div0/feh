@@ -1,7 +1,7 @@
 /* filelist.c
 
 Copyright (C) 1999-2003 Tom Gilbert.
-Copyright (C) 2010-2018 Daniel Friesel.
+Copyright (C) 2010-2020 Daniel Friesel.
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to
@@ -30,6 +30,7 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 #include "feh.h"
 #include "filelist.h"
+#include "signals.h"
 #include "options.h"
 
 gib_list *filelist = NULL;
@@ -37,7 +38,6 @@ gib_list *original_file_items = NULL; /* original file items from argv */
 int filelist_len = 0;
 gib_list *current_file = NULL;
 extern int errno;
-extern int sig_exit; /* exit flag from signal handler */
 
 static gib_list *rm_filelist = NULL;
 
@@ -76,7 +76,7 @@ void feh_file_free(feh_file * file)
 #ifdef HAVE_LIBEXIF
 	if (file->ed)
 		exif_data_unref(file->ed);
-#endif		
+#endif
 	free(file);
 	return;
 }
@@ -402,7 +402,6 @@ void feh_file_dirname(char *dst, feh_file * f, int maxlen)
 	dst[n] = '\0';
 }
 
-#ifdef HAVE_VERSCMP
 static inline int strcmp_or_strverscmp(const char *s1, const char *s2)
 {
 	if (!opt.version_sort)
@@ -410,9 +409,6 @@ static inline int strcmp_or_strverscmp(const char *s1, const char *s2)
 	else
 		return(strverscmp(s1, s2));
 }
-#else
-#define strcmp_or_strverscmp strcmp
-#endif
 
 int feh_cmp_filename(void *file1, void *file2)
 {

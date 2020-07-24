@@ -1,7 +1,7 @@
 /* winwidget.c
 
 Copyright (C) 1999-2003 Tom Gilbert.
-Copyright (C) 2010-2018 Daniel Friesel.
+Copyright (C) 2010-2020 Daniel Friesel.
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to
@@ -29,6 +29,10 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 #include "winwidget.h"
 #include "options.h"
 #include "events.h"
+
+#ifdef HAVE_INOTIFY
+#include <sys/inotify.h>
+#endif
 
 static void winwidget_unregister(winwidget win);
 static void winwidget_register(winwidget win);
@@ -77,6 +81,10 @@ static winwidget winwidget_allocate(void)
 	ret->click_offset_x = 0;
 	ret->click_offset_y = 0;
 	ret->has_rotated = 0;
+
+#ifdef HAVE_INOTIFY
+    ret->inotify_wd = -1;
+#endif
 
 	return(ret);
 }
@@ -203,7 +211,6 @@ void winwidget_create_window(winwidget ret, int w, int h)
 	}
 
 	if (opt.paused) {
-		printf("name %s\n", ret->name);
 		tmpname = estrjoin(" ", ret->name, "[Paused]", NULL);
 		free(ret->name);
 		ret->name = tmpname;
@@ -298,7 +305,7 @@ void winwidget_create_window(winwidget ret, int w, int h)
 	winwidget_update_title(ret);
 	xch = XAllocClassHint();
 	xch->res_name = "feh";
-	xch->res_class = "feh";
+	xch->res_class = opt.x11_class ? opt.x11_class : "feh";
 	XSetClassHint(disp, ret->win, xch);
 	XFree(xch);
 
@@ -663,6 +670,9 @@ void winwidget_destroy_xwin(winwidget winwid)
 
 void winwidget_destroy(winwidget winwid)
 {
+#ifdef HAVE_INOTIFY
+    winwidget_inotify_remove(winwid);
+#endif
 	winwidget_destroy_xwin(winwid);
 	if (winwid->name)
 		free(winwid->name);
@@ -673,6 +683,76 @@ void winwidget_destroy(winwidget winwid)
 	free(winwid);
 	return;
 }
+
+#ifdef HAVE_INOTIFY
+void winwidget_inotify_remove(winwidget winwid)
+{
+    if (winwid->inotify_wd >= 0) {
+        D(("Removing inotify watch\n"));
+        if (inotify_rm_watch(opt.inotify_fd, winwid->inotify_wd))
+            weprintf("inotify_rm_watch failed:");
+        winwid->inotify_wd = -1;
+    }
+}
+#endif
+
+#ifdef HAVE_INOTIFY
+void winwidget_inotify_add(winwidget winwid, feh_file * file)
+{
+    if (opt.auto_reload) {
+        D(("Adding inotify watch for %s\n", file->filename));
+        char dir[PATH_MAX];
+        feh_file_dirname(dir, file, PATH_MAX);
+
+        /*
+         * Handle files without directory part, e.g. "feh somefile.jpg".
+         * These always reside in the current directory.
+         */
+        if (dir[0] == '\0') {
+            dir[0] = '.';
+            dir[1] = '\0';
+        }
+        winwid->inotify_wd = inotify_add_watch(opt.inotify_fd, dir, IN_CLOSE_WRITE | IN_MOVED_TO);
+        if (winwid->inotify_wd < 0)
+            weprintf("inotify_add_watch failed:");
+    }
+}
+#endif
+
+#ifdef HAVE_INOTIFY
+#define INOTIFY_BUFFER_LEN (1024 * (sizeof (struct inotify_event)) + 16)
+void feh_event_handle_inotify(void)
+{
+    D(("Received inotify events\n"));
+    char buf[INOTIFY_BUFFER_LEN];
+    int i = 0;
+    int len = read (opt.inotify_fd, buf, INOTIFY_BUFFER_LEN);
+    if (len < 0) {
+        if (errno != EINTR)
+            eprintf("inotify event read failed");
+    } else if (!len)
+        eprintf("inotify event read failed");
+    while (i < len) {
+        struct inotify_event *event;
+        event = (struct inotify_event *) &buf[i];
+        for (int j = 0; j < window_num; j++) {
+            if(windows[j]->inotify_wd == event->wd) {
+                if (event->mask & IN_IGNORED) {
+                    D(("inotify watch was implicitely removed\n"));
+                    windows[j]->inotify_wd = -1;
+                } else if (event->mask & (IN_CLOSE_WRITE | IN_MOVED_TO)) {
+                    if (strcmp(event->name, FEH_FILE(windows[j]->file->data)->name) == 0) {
+                        D(("inotify says file changed\n"));
+                        feh_reload_image(windows[j], 0, 0);
+                    }
+                }
+                break;
+            }
+        }
+        i += sizeof(struct inotify_event) + event->len;
+    }
+}
+#endif
 
 void winwidget_destroy_all(void)
 {
@@ -707,7 +787,16 @@ winwidget winwidget_get_first_window_of_type(unsigned int type)
 int winwidget_loadimage(winwidget winwid, feh_file * file)
 {
 	D(("filename %s\n", file->filename));
-	return(feh_load_image(&(winwid->im), file));
+#ifdef HAVE_INOTIFY
+    winwidget_inotify_remove(winwid);
+#endif
+    int res = feh_load_image(&(winwid->im), file);
+#ifdef HAVE_INOTIFY
+    if (res) {
+        winwidget_inotify_add(winwid, file);
+    }
+#endif
+	return(res);
 }
 
 void winwidget_show(winwidget winwid)
@@ -722,6 +811,8 @@ void winwidget_show(winwidget winwid)
 		/* wait for the window to map */
 		D(("Waiting for window to map\n"));
 		XMaskEvent(disp, StructureNotifyMask, &ev);
+		winwidget_get_geometry(winwid, NULL);
+
 		/* Unfortunately, StructureNotifyMask does not only mask
 		 * the events of type MapNotify (which we want to mask here)
 		 * but also such of type ConfigureNotify (and others, see
@@ -740,8 +831,6 @@ void winwidget_show(winwidget winwid)
 void winwidget_move(winwidget winwid, int x, int y)
 {
 	if (winwid && ((winwid->x != x) || (winwid->y != y))) {
-		winwid->x = x;
-		winwid->y = y;
 		winwid->x = (x > scr->width) ? scr->width : x;
 		winwid->y = (y > scr->height) ? scr->height : y;
 		XMoveWindow(disp, winwid->win, winwid->x, winwid->y);
@@ -822,6 +911,8 @@ void winwidget_resize(winwidget winwid, int w, int h, int force_resize)
 
 		winwid->had_resize = 1;
 		XFlush(disp);
+
+		winwidget_get_geometry(winwid, NULL);
 
 		if (force_resize && (opt.geom_flags & (WidthValue | HeightValue))
 				&& (winwid->type != WIN_TYPE_THUMBNAIL)) {
@@ -1062,8 +1153,11 @@ void winwidget_get_geometry(winwidget winwid, int *rect)
 {
 	unsigned int bw, bp;
 	Window child;
+
+	int inner_rect[4];
+
 	if (!rect)
-		return;
+		rect = inner_rect;
 
 	XGetGeometry(disp, winwid->win, &root, &(rect[0]), &(rect[1]), (unsigned
 				int *)&(rect[2]), (unsigned int *)&(rect[3]), &bw, &bp);

@@ -1,7 +1,7 @@
 /* main.c
 
 Copyright (C) 1999-2003 Tom Gilbert.
-Copyright (C) 2010-2018 Daniel Friesel.
+Copyright (C) 2010-2020 Daniel Friesel.
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to
@@ -34,6 +34,10 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 #include "wallpaper.h"
 #include <termios.h>
 
+#ifdef HAVE_INOTIFY
+#include <sys/inotify.h>
+#endif
+
 char **cmdargv = NULL;
 int cmdargc = 0;
 char *mode = NULL;
@@ -53,6 +57,16 @@ int main(int argc, char **argv)
 		init_x_and_imlib();
 		init_keyevents();
 		init_buttonbindings();
+#ifdef HAVE_INOTIFY
+        if (opt.auto_reload) {
+            opt.inotify_fd = inotify_init();
+            if (opt.inotify_fd < 0) {
+                opt.auto_reload = 0;
+                weprintf("inotify_init failed:");
+                weprintf("Disabling inotify-based auto-reload");
+            }
+        }
+#endif
 	}
 
 	feh_event_init();
@@ -146,6 +160,13 @@ int feh_main_iteration(int block)
 	FD_SET(xfd, &fdset);
 	if (control_via_stdin)
 		FD_SET(STDIN_FILENO, &fdset);
+#ifdef HAVE_INOTIFY
+    if (opt.auto_reload) {
+        FD_SET(opt.inotify_fd, &fdset);
+        if (opt.inotify_fd >= fdsize)
+            fdsize = opt.inotify_fd + 1;
+    }
+#endif
 
 	/* Timers */
 	ft = first_timer;
@@ -183,7 +204,7 @@ int feh_main_iteration(int block)
 					&& ((errno == ENOMEM) || (errno == EINVAL)
 						|| (errno == EBADF)))
 				eprintf("Connection to X display lost");
-			if ((ft) && (count == 0)) {
+			if (count == 0) {
 				/* This means the timer is due to be executed. If count was > 0,
 				   that would mean an X event had woken us, we're not interested
 				   in that */
@@ -191,6 +212,10 @@ int feh_main_iteration(int block)
 			}
 			else if ((count > 0) && (FD_ISSET(0, &fdset)))
 				feh_event_handle_stdin();
+#ifdef HAVE_INOTIFY
+			else if ((count > 0) && (FD_ISSET(opt.inotify_fd, &fdset)))
+                feh_event_handle_inotify();
+#endif
 		}
 	} else {
 		/* Don't block if there are events in the queue. That's a bit rude ;-) */
@@ -204,6 +229,10 @@ int feh_main_iteration(int block)
 				eprintf("Connection to X display lost");
 			else if ((count > 0) && (FD_ISSET(0, &fdset)))
 				feh_event_handle_stdin();
+#ifdef HAVE_INOTIFY
+			else if ((count > 0) && (FD_ISSET(opt.inotify_fd, &fdset)))
+                feh_event_handle_inotify();
+#endif
 		}
 	}
 	if (window_num == 0 || sig_exit != 0)
@@ -216,8 +245,13 @@ void feh_clean_exit(void)
 {
 	delete_rm_files();
 
-	free(opt.menu_bg);
 	free(opt.menu_font);
+
+#ifdef HAVE_INOTIFY
+    if (opt.auto_reload)
+        if (close(opt.inotify_fd))
+            eprintf("inotify close failed");
+#endif
 
 	if(disp)
 		XCloseDisplay(disp);

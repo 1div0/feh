@@ -1,7 +1,7 @@
 /* options.c
 
 Copyright (C) 1999-2003 Tom Gilbert.
-Copyright (C) 2010-2018 Daniel Friesel.
+Copyright (C) 2010-2020 Daniel Friesel.
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to
@@ -25,7 +25,6 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 */
 
 #include <strings.h>
-
 #include "feh.h"
 #include "filelist.h"
 #include "options.h"
@@ -62,7 +61,6 @@ void init_parse_options(int argc, char **argv)
 	opt.scroll_step = 20;
 	opt.menu_font = estrdup(DEFAULT_MENU_FONT);
 	opt.font = NULL;
-	opt.menu_bg = estrdup(PREFIX "/share/feh/images/menubg_default.png");
 	opt.max_height = opt.max_width = UINT_MAX;
 
 	opt.start_list_at = NULL;
@@ -75,6 +73,10 @@ void init_parse_options(int argc, char **argv)
 	opt.xinerama = 1;
 	opt.xinerama_index = -1;
 #endif				/* HAVE_LIBXINERAMA */
+#ifdef HAVE_INOTIFY
+	opt.auto_reload = 1;
+#endif				/* HAVE_INOTIFY */
+	opt.use_conversion_cache = 1;
 
 	feh_getopt_theme(argc, argv);
 
@@ -132,6 +134,7 @@ static void feh_load_options_for_theme(char *theme)
 	char *rcpath = NULL;
 	char *oldrcpath = NULL;
 	char *confbase = getenv("XDG_CONFIG_HOME");
+	// s, s1 and s2 must always have identical size
 	char s[1024], s1[1024], s2[1024];
 	int cont = 0;
 	int bspos;
@@ -168,11 +171,19 @@ static void feh_load_options_for_theme(char *theme)
 		s2[0] = '\0';
 
 		if (cont) {
+			/*
+			 * fgets ensures that s contains no more than 1023 characters
+			 * (+ 1 null byte)
+			 */
 			sscanf(s, " %[^\n]\n", (char *) &s2);
 			if (!*s2)
 				break;
 			D(("Got continued options %s\n", s2));
 		} else {
+			/*
+			 * fgets ensures that s contains no more than 1023 characters
+			 * (+ 1 null byte)
+			 */
 			sscanf(s, "%s %[^\n]\n", (char *) &s1, (char *) &s2);
 			if (!(*s1) || (!*s2) || (*s1 == '\n') || (*s1 == '#')) {
 				cont = 0;
@@ -314,12 +325,11 @@ static void feh_parse_option_array(int argc, char **argv, int finalrun)
 {
 	int discard;
 	static char stropts[] =
-		"a:A:b:B:cC:dD:e:E:f:Fg:GhH:iIj:J:kK:lL:mM:nNo:O:pPqrR:sS:tT:uUvVwW:xXy:YzZ"
-		".@:^:~:):|:+:<:>:";
+		"a:A:b:B:C:dD:e:E:f:Fg:GhH:iIj:J:kK:lL:mM:nNo:O:pPqrR:sS:tT:uUvVwW:xXy:YzZ"
+		".@:^:~:|:+:<:>:";
 
 	/* (*name, has_arg, *flag, val) See: struct option in getopts.h */
 	static struct option lopts[] = {
-		{"menu-bg"       , 1, 0, ')'},
 		{"debug"         , 0, 0, '+'},
 		{"scale-down"    , 0, 0, '.'},
 		{"max-dimension" , 1, 0, '<'},
@@ -403,7 +413,6 @@ static void feh_parse_option_array(int argc, char **argv, int finalrun)
 		{"draw-exif"     , 0, 0, 223},
 		{"auto-rotate"   , 0, 0, 242},
 #endif
-		{"cycle-once"    , 0, 0, 224},
 		{"no-xinerama"   , 0, 0, 225},
 		{"draw-tinted"   , 0, 0, 229},
 		{"info"          , 1, 0, 234},
@@ -419,6 +428,11 @@ static void feh_parse_option_array(int argc, char **argv, int finalrun)
 		{"conversion-timeout" , 1, 0, 245},
 		{"version-sort"  , 0, 0, 246},
 		{"offset"        , 1, 0, 247},
+#ifdef HAVE_INOTIFY
+		{"auto-reload"   , 0, 0, 248},
+#endif
+		{"class"         , 1, 0, 249},
+		{"no-conversion-cache", 0, 0, 250},
 		{0, 0, 0, 0}
 	};
 	int optch = 0, cmdx = 0;
@@ -427,11 +441,6 @@ static void feh_parse_option_array(int argc, char **argv, int finalrun)
 		D(("Got option, getopt calls it %d, or %c\n", optch, optch));
 		switch (optch) {
 		case 0:
-			break;
-		case ')':
-			free(opt.menu_bg);
-			opt.menu_bg = estrdup(optarg);
-			weprintf("The --menu-bg option is deprecated and will be removed by 2012");
 			break;
 		case '+':
 			opt.debug = 1;
@@ -469,6 +478,8 @@ static void feh_parse_option_array(int argc, char **argv, int finalrun)
 			if (opt.slideshow_delay < 0.0) {
 				opt.slideshow_delay *= (-1);
 				opt.paused = 1;
+			} else {
+				opt.paused = 0;
 			}
 			break;
 		case 'E':
@@ -514,6 +525,10 @@ static void feh_parse_option_array(int argc, char **argv, int finalrun)
 			break;
 		case 'R':
 			opt.reload = atof(optarg);
+			opt.use_conversion_cache = 0;
+#ifdef HAVE_INOTIFY
+			opt.auto_reload = 0;
+#endif
 			break;
 		case 'S':
 			if (!strcasecmp(optarg, "name"))
@@ -742,10 +757,6 @@ static void feh_parse_option_array(int argc, char **argv, int finalrun)
 			opt.auto_rotate = 1;
 			break;
 #endif
-		case 224:
-			weprintf("--cycle-once is deprecated, please use --on-last-slide=quit instead");
-			opt.on_last_slide = ON_LAST_SLIDE_QUIT;
-			break;
 		case 225:
 			opt.xinerama = 0;
 			break;
@@ -754,10 +765,12 @@ static void feh_parse_option_array(int argc, char **argv, int finalrun)
 			break;
 		case 234:
 			opt.info_cmd = estrdup(optarg);
-			if (opt.info_cmd[0] == ';')
+			if (opt.info_cmd[0] == ';') {
+				opt.draw_info = 0;
 				opt.info_cmd++;
-			else
+			} else {
 				opt.draw_info = 1;
+			}
 			break;
 		case 235:
 			opt.force_aliasing = 1;
@@ -809,6 +822,17 @@ static void feh_parse_option_array(int argc, char **argv, int finalrun)
 			opt.offset_flags = XParseGeometry(optarg, &opt.offset_x,
 					&opt.offset_y, (unsigned int *)&discard, (unsigned int *)&discard);
 			break;
+#ifdef HAVE_INOTIFY
+		case 248:
+			opt.auto_reload = 1;
+			break;
+#endif
+		case 249:
+			opt.x11_class = estrdup(optarg);
+			break;
+		case 250:
+			opt.use_conversion_cache = 0;
+			break;
 		default:
 			break;
 		}
@@ -824,8 +848,30 @@ static void feh_parse_option_array(int argc, char **argv, int finalrun)
 			add_file_to_filelist_recursively(argv[optind++], FILELIST_FIRST);
 		}
 	}
-	else if (finalrun && !opt.filelistfile && !opt.bgmode)
-		add_file_to_filelist_recursively(".", FILELIST_FIRST);
+	else if (finalrun && !opt.filelistfile && !opt.bgmode) {
+		/*
+		 * if --start-at is a non-local URL (i.e., does not start with file:///),
+		 * behave as if "feh URL" was called (there is no directory we can load)
+		 */
+		if (opt.start_list_at && path_is_url(opt.start_list_at) && (strlen(opt.start_list_at) <= 8 || strncmp(opt.start_list_at, "file:///", 8) != 0)) {
+			add_file_to_filelist_recursively(opt.start_list_at, FILELIST_FIRST);
+		} else if (opt.start_list_at && strrchr(opt.start_list_at, '/')) {
+			if (strlen(opt.start_list_at) > 8 && strncmp(opt.start_list_at, "file:///", 8) == 0) {
+				char *start_at_path = estrdup(opt.start_list_at + 7);
+				free(opt.start_list_at);
+				opt.start_list_at = start_at_path;
+			}
+			char *target_directory = estrdup(opt.start_list_at);
+			char *filename_start = strrchr(target_directory, '/');
+			if (filename_start) {
+				*filename_start = '\0';
+			}
+			add_file_to_filelist_recursively(target_directory, FILELIST_FIRST);
+			free(target_directory);
+		} else {
+			add_file_to_filelist_recursively(".", FILELIST_FIRST);
+		}
+	}
 
 	/* So that we can safely be called again */
 	optind = 0;
@@ -885,6 +931,10 @@ static void show_version(void)
 		"exif "
 #endif
 
+#ifdef HAVE_INOTIFY
+		"inotify "
+#endif
+
 #ifdef INCLUDE_HELP
 		"help "
 #endif
@@ -893,8 +943,8 @@ static void show_version(void)
 		"stat64 "
 #endif
 
-#ifdef HAVE_VERSCMP
-		"verscmp "
+#ifdef HAVE_STRVERSCMP
+         "verscmp "
 #endif
 
 #ifdef HAVE_LIBXINERAMA

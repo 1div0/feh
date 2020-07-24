@@ -1,7 +1,7 @@
 /* menu.c
 
 Copyright (C) 1999-2003 Tom Gilbert.
-Copyright (C) 2010-2018 Daniel Friesel.
+Copyright (C) 2010-2020 Daniel Friesel.
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to
@@ -134,7 +134,7 @@ feh_menu *feh_menu_new(void)
 	menus = l;
 
 	if (!bg) {
-		feh_load_image_char(&bg, opt.menu_bg);
+		feh_load_image_char(&bg, PREFIX "/share/feh/images/menubg_default.png");
 		if (bg) {
 			border.left = border.right = border.top = border.bottom
 				= 4;

@@ -1,7 +1,7 @@
 /* options.h
 
 Copyright (C) 1999-2003 Tom Gilbert.
-Copyright (C) 2010-2018 Daniel Friesel.
+Copyright (C) 2010-2020 Daniel Friesel.
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to
@@ -49,6 +49,7 @@ struct __fehoptions {
 	unsigned char aspect;
 	unsigned char stretch;
 	unsigned char keep_http;
+	unsigned char use_conversion_cache;
 	unsigned char borderless;
 	unsigned char randomize;
 	unsigned char jump_on_resort;
@@ -57,6 +58,10 @@ struct __fehoptions {
 #ifdef HAVE_LIBEXIF
 	unsigned char draw_exif;
 	unsigned char auto_rotate;
+#endif
+#ifdef HAVE_INOTIFY
+	unsigned char auto_reload;
+    int inotify_fd;
 #endif
 	unsigned char list;
 	unsigned char quiet;
@@ -96,7 +101,6 @@ struct __fehoptions {
 	char *filelistfile;
 	char *menu_font;
 	char *customlist;
-	char *menu_bg;
 	char *caption_path;
 	char *start_list_at;
 	char *info_cmd;
@@ -125,6 +129,7 @@ struct __fehoptions {
 	int zoom_mode;
 	unsigned char adjust_reload;
 	int xinerama_index;
+	char *x11_class;
 
 	/* signed in case someone wants to invert scrolling real quick */
 	int scroll_step;

@@ -1,7 +1,7 @@
 /* winwidget.h
 
 Copyright (C) 1999-2003 Tom Gilbert.
-Copyright (C) 2010-2018 Daniel Friesel.
+Copyright (C) 2010-2020 Daniel Friesel.
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to
@@ -116,7 +116,16 @@ struct __winwidget {
 	time_t click_start_time;
 
 	unsigned char has_rotated;
+
+#ifdef HAVE_INOTIFY
+	int inotify_wd;
+#endif
 };
+
+#ifdef HAVE_INOTIFY
+void winwidget_inotify_remove(winwidget winwid);
+void winwidget_inotify_add(winwidget winwid, feh_file * file);
+#endif
 
 int winwidget_loadimage(winwidget winwid, feh_file * filename);
 void winwidget_show(winwidget winwid);
